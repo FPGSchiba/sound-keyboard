@@ -1,14 +1,15 @@
 use esp_idf_svc::hal::delay::FreeRtos;
 use esp_idf_svc::hal::peripherals::Peripherals;
+use std::sync::mpsc::{self, Receiver, Sender};
 
 mod io;
+mod hid;
+
 use io::{ButtonEvent, EncoderDirection, IoHandler};
+use hid::{Command, send_hid_report, init_usb}; // Import init_usb!
 
 fn main() {
-    // Required: links ESP-IDF runtime patches
     esp_idf_svc::sys::link_patches();
-
-    // Bind the log crate to ESP logging
     esp_idf_svc::log::EspLogger::initialize_default();
 
     log::info!("Sound keyboard starting...");
@@ -16,36 +17,47 @@ fn main() {
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
 
-    // Construct IO handler – LED turns on immediately inside ::new()
+    let (tx, rx): (Sender<Command>, Receiver<Command>) = mpsc::channel();
+
     let mut io = IoHandler::new(
-        pins.gpio21, // Status LED (XIAO ESP32S3 orange user LED, active low)
-        pins.gpio4, // Encoder CLK
-        pins.gpio5, // Encoder DT
-        pins.gpio6, // Skip Back button
-        pins.gpio7, // Skip Ahead button
-        pins.gpio8, // Mute button
-        pins.gpio9, // Pause/Play button
+        pins.gpio21,
+        pins.gpio5,
+        pins.gpio6,
+        pins.gpio1,
+        pins.gpio2,
+        pins.gpio3,
+        pins.gpio4,
     );
+
+    // ── INITIALIZE NATIVE USB ──
+    init_usb();
 
     log::info!("Ready – LED on, IO initialised");
 
     loop {
-        // ── Rotary encoder ────────────────────────────────────────────────
+        // --- Polling (Producer) ---
         if let Some(dir) = io.poll_encoder() {
-            match dir {
-                EncoderDirection::ClockWise => log::info!("Encoder → volume up"),
-                EncoderDirection::CounterClockWise => log::info!("Encoder → volume down"),
-            }
+            let cmd = match dir {
+                EncoderDirection::ClockWise => Command::VolumeUp,
+                EncoderDirection::CounterClockWise => Command::VolumeDown,
+            };
+            tx.send(cmd).ok();
         }
 
-        // ── Buttons ───────────────────────────────────────────────────────
         if let Some(event) = io.poll_buttons() {
-            match event {
-                ButtonEvent::SkipBack => log::info!("Button → skip back"),
-                ButtonEvent::SkipAhead => log::info!("Button → skip ahead"),
-                ButtonEvent::Mute => log::info!("Button → mute"),
-                ButtonEvent::PausePlay => log::info!("Button → pause/play"),
-            }
+            let cmd = match event {
+                ButtonEvent::SkipBack => Command::ScanPrevious,
+                ButtonEvent::SkipAhead => Command::ScanNext,
+                ButtonEvent::Mute => Command::Mute,
+                ButtonEvent::PausePlay => Command::PlayPause,
+            };
+            tx.send(cmd).ok();
+        }
+
+        // --- OS Interaction (Consumer) ---
+        while let Ok(command) = rx.try_recv() {
+            log::info!("Sending HID Command: {:?}", command);
+            send_hid_report(command); // No pointer needed!
         }
 
         FreeRtos::delay_ms(10);
