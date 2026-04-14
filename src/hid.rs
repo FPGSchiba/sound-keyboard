@@ -1,6 +1,6 @@
 use usbd_human_interface_device::page::Consumer;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     VolumeUp,
     VolumeDown,
