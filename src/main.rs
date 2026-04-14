@@ -4,9 +4,8 @@
 extern crate esp_backtrace;
 
 use embassy_executor::Spawner;
-use embassy_futures::join::join;
+use embassy_futures::{join::join, yield_now};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::Timer;
 use esp_hal::{
     otg_fs::{Usb, UsbBus},
     timer::timg::TimerGroup,
@@ -109,7 +108,7 @@ async fn main(_spawner: Spawner) {
                 CHANNEL.try_send(cmd).ok();
             }
 
-            Timer::after_millis(10).await;
+            yield_now().await;
         }
     };
 
@@ -135,12 +134,10 @@ async fn main(_spawner: Spawner) {
                 };
                 consumer_hid.device().write_report(&press).ok();
 
-                // Hold: keep USB alive for ~5ms
-                let deadline =
-                    embassy_time::Instant::now() + embassy_time::Duration::from_millis(5);
-                while embassy_time::Instant::now() < deadline {
+                // Hold: keep USB alive for ~5ms worth of poll cycles
+                for _ in 0..1000u32 {
                     usb_dev.poll(&mut [&mut consumer_hid]);
-                    Timer::after_micros(500).await;
+                    yield_now().await;
                 }
 
                 // Release report (all keys up)
@@ -149,8 +146,7 @@ async fn main(_spawner: Spawner) {
                 };
                 consumer_hid.device().write_report(&release).ok();
             } else {
-                // ~500 µs poll tick when idle
-                Timer::after_micros(500).await;
+                yield_now().await;
             }
         }
     };
