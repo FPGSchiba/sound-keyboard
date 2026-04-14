@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["FPG Schiba <CraftZockerLP@gmail.com>"]
 edition = "2021"
 resolver = "2"
-rust-version = "1.77"
 
 [[bin]]
 name = "sound-keyboard"
@@ -12,19 +11,29 @@ harness = false
 
 [profile.release]
 opt-level = "s"
+lto = true
+codegen-units = 1
 
 [profile.dev]
 debug = true
 opt-level = "z"
 
-[features]
-default = []
-experimental = ["esp-idf-svc/experimental"]
-
 [dependencies]
-log = "0.4"
-esp-idf-svc = "0.52.1"
-anyhow = "1.0" # Optional, but highly recommended for standard Rust error handling
+# HAL + panic handler
+esp-hal              = { version = "0.22", features = ["esp32s3"] }
+esp-backtrace        = { version = "0.14", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
+esp-println          = { version = "0.12", features = ["esp32s3", "log"] }
+log                  = { version = "0.4",  default-features = false }
 
-[build-dependencies]
-embuild = "0.33"
+# Embassy async runtime
+embassy-executor     = { version = "0.6",  features = ["task-arena-size-20480"] }
+embassy-time         = { version = "0.3" }
+embassy-sync         = { version = "0.6" }
+embassy-futures      = { version = "0.1" }
+esp-hal-embassy      = { version = "0.5",  features = ["esp32s3", "integrated-timers"] }
+
+# USB HID
+usb-device                     = { version = "0.3" }
+usbd-human-interface-device    = { version = "0.5" }
+
+critical-section = "1.1"
