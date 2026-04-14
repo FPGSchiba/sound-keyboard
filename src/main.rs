@@ -95,7 +95,7 @@ async fn main(_spawner: Spawner) {
                     EncoderDirection::ClockWise => Command::VolumeUp,
                     EncoderDirection::CounterClockWise => Command::VolumeDown,
                 };
-                CHANNEL.send(cmd).await;
+                CHANNEL.try_send(cmd).ok();
             }
 
             // Poll buttons
@@ -106,7 +106,7 @@ async fn main(_spawner: Spawner) {
                     ButtonEvent::Mute => Command::Mute,
                     ButtonEvent::PausePlay => Command::PlayPause,
                 };
-                CHANNEL.send(cmd).await;
+                CHANNEL.try_send(cmd).ok();
             }
 
             Timer::after_millis(10).await;
@@ -135,8 +135,12 @@ async fn main(_spawner: Spawner) {
                 };
                 consumer_hid.device().write_report(&press).ok();
 
-                // Short hold so the host registers the key
-                Timer::after_millis(5).await;
+                // Hold: keep USB alive for ~5ms
+                let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(5);
+                while embassy_time::Instant::now() < deadline {
+                    usb_dev.poll(&mut [&mut consumer_hid]);
+                    Timer::after_micros(500).await;
+                }
 
                 // Release report (all keys up)
                 let release = MultipleConsumerReport {
