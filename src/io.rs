@@ -46,27 +46,27 @@ pub struct IoHandler {
     encoder_last_clk: bool,
 
     // Control buttons (active low, pull-up)
-    btn_skip_back:  Input<'static>,
+    btn_skip_back: Input<'static>,
     btn_skip_ahead: Input<'static>,
-    btn_mute:       Input<'static>,
+    btn_mute: Input<'static>,
     btn_pause_play: Input<'static>,
 
     // Debounce state per button: (was_pressed, last_event_time)
-    skip_back_db:  (bool, Instant),
+    skip_back_db: (bool, Instant),
     skip_ahead_db: (bool, Instant),
-    mute_db:       (bool, Instant),
+    mute_db: (bool, Instant),
     pause_play_db: (bool, Instant),
 }
 
 impl IoHandler {
     pub fn new(
-        led_pin:    impl OutputPin + 'static,
-        enc_clk:    impl InputPin  + 'static,
-        enc_dt:     impl InputPin  + 'static,
-        skip_back:  impl InputPin  + 'static,
-        skip_ahead: impl InputPin  + 'static,
-        mute:       impl InputPin  + 'static,
-        pause_play: impl InputPin  + 'static,
+        led_pin: impl OutputPin + 'static,
+        enc_clk: impl InputPin + 'static,
+        enc_dt: impl InputPin + 'static,
+        skip_back: impl InputPin + 'static,
+        skip_ahead: impl InputPin + 'static,
+        mute: impl InputPin + 'static,
+        pause_play: impl InputPin + 'static,
     ) -> Self {
         let input_cfg = InputConfig::default().with_pull(Pull::Up);
 
@@ -76,13 +76,13 @@ impl IoHandler {
 
         // Encoder with internal pull-ups
         let encoder_clk = Input::new(enc_clk, input_cfg);
-        let encoder_dt  = Input::new(enc_dt,  input_cfg);
+        let encoder_dt = Input::new(enc_dt, input_cfg);
         let encoder_last_clk = encoder_clk.is_high();
 
         // Buttons with internal pull-ups
-        let btn_skip_back  = Input::new(skip_back,  input_cfg);
+        let btn_skip_back = Input::new(skip_back, input_cfg);
         let btn_skip_ahead = Input::new(skip_ahead, input_cfg);
-        let btn_mute       = Input::new(mute,       input_cfg);
+        let btn_mute = Input::new(mute, input_cfg);
         let btn_pause_play = Input::new(pause_play, input_cfg);
 
         // Use tick 0 as epoch so first press is always accepted after 50 ms
@@ -97,9 +97,9 @@ impl IoHandler {
             btn_skip_ahead,
             btn_mute,
             btn_pause_play,
-            skip_back_db:  (false, epoch),
+            skip_back_db: (false, epoch),
             skip_ahead_db: (false, epoch),
-            mute_db:       (false, epoch),
+            mute_db: (false, epoch),
             pause_play_db: (false, epoch),
         }
     }
@@ -108,7 +108,11 @@ impl IoHandler {
 
     pub fn set_led(&mut self, on: bool) {
         // Active low: on → LOW, off → HIGH
-        if on { self.led.set_low() } else { self.led.set_high() }
+        if on {
+            self.led.set_low()
+        } else {
+            self.led.set_high()
+        }
     }
 
     // ── Encoder polling ──────────────────────────────────────────────────────
@@ -134,10 +138,38 @@ impl IoHandler {
     pub fn poll_buttons(&mut self) -> Option<ButtonEvent> {
         let now = Instant::now();
 
-        if let Some(ev) = Self::debounce(self.btn_skip_back.is_low(),  &mut self.skip_back_db,  now, ButtonEvent::SkipBack)  { return Some(ev); }
-        if let Some(ev) = Self::debounce(self.btn_skip_ahead.is_low(), &mut self.skip_ahead_db, now, ButtonEvent::SkipAhead) { return Some(ev); }
-        if let Some(ev) = Self::debounce(self.btn_mute.is_low(),       &mut self.mute_db,       now, ButtonEvent::Mute)      { return Some(ev); }
-        if let Some(ev) = Self::debounce(self.btn_pause_play.is_low(), &mut self.pause_play_db, now, ButtonEvent::PausePlay) { return Some(ev); }
+        if let Some(ev) = Self::debounce(
+            self.btn_skip_back.is_low(),
+            &mut self.skip_back_db,
+            now,
+            ButtonEvent::SkipBack,
+        ) {
+            return Some(ev);
+        }
+        if let Some(ev) = Self::debounce(
+            self.btn_skip_ahead.is_low(),
+            &mut self.skip_ahead_db,
+            now,
+            ButtonEvent::SkipAhead,
+        ) {
+            return Some(ev);
+        }
+        if let Some(ev) = Self::debounce(
+            self.btn_mute.is_low(),
+            &mut self.mute_db,
+            now,
+            ButtonEvent::Mute,
+        ) {
+            return Some(ev);
+        }
+        if let Some(ev) = Self::debounce(
+            self.btn_pause_play.is_low(),
+            &mut self.pause_play_db,
+            now,
+            ButtonEvent::PausePlay,
+        ) {
+            return Some(ev);
+        }
         None
     }
 

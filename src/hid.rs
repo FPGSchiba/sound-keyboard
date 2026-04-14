@@ -13,11 +13,11 @@ pub enum Command {
 /// Maps a logical Command to the matching USB Consumer usage ID.
 pub fn command_to_consumer(cmd: Command) -> Consumer {
     match cmd {
-        Command::VolumeUp      => Consumer::VolumeIncrement,
-        Command::VolumeDown    => Consumer::VolumeDecrement,
-        Command::Mute          => Consumer::Mute,
-        Command::PlayPause     => Consumer::PlayPause,
-        Command::ScanNext      => Consumer::ScanNextTrack,
-        Command::ScanPrevious  => Consumer::ScanPreviousTrack,
+        Command::VolumeUp => Consumer::VolumeIncrement,
+        Command::VolumeDown => Consumer::VolumeDecrement,
+        Command::Mute => Consumer::Mute,
+        Command::PlayPause => Consumer::PlayPause,
+        Command::ScanNext => Consumer::ScanNextTrack,
+        Command::ScanPrevious => Consumer::ScanPreviousTrack,
     }
 }

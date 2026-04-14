@@ -26,7 +26,7 @@ use usbd_human_interface_device::{
 mod hid;
 mod io;
 
-use hid::{Command, command_to_consumer};
+use hid::{command_to_consumer, Command};
 use io::{ButtonEvent, EncoderDirection, IoHandler};
 
 // ── Static USB endpoint memory (must be in DRAM) ─────────────────────────────
@@ -136,7 +136,8 @@ async fn main(_spawner: Spawner) {
                 consumer_hid.device().write_report(&press).ok();
 
                 // Hold: keep USB alive for ~5ms
-                let deadline = embassy_time::Instant::now() + embassy_time::Duration::from_millis(5);
+                let deadline =
+                    embassy_time::Instant::now() + embassy_time::Duration::from_millis(5);
                 while embassy_time::Instant::now() < deadline {
                     usb_dev.poll(&mut [&mut consumer_hid]);
                     Timer::after_micros(500).await;
