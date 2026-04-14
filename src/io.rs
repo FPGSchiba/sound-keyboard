@@ -1,8 +1,8 @@
+use core::default::Default;
+use core::option::Option::{self, None, Some};
+
 use embassy_time::{Duration, Instant};
-use esp_hal::{
-    gpio::{Input, Level, Output, Pull},
-    peripheral::Peripheral,
-};
+use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin, Pull};
 
 // ── Pin Assignments ───────────────────────────────────────────────────────────
 //
@@ -60,28 +60,30 @@ pub struct IoHandler {
 
 impl IoHandler {
     pub fn new(
-        led_pin:    impl Peripheral<P = impl esp_hal::gpio::OutputPin> + 'static,
-        enc_clk:    impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
-        enc_dt:     impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
-        skip_back:  impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
-        skip_ahead: impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
-        mute:       impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
-        pause_play: impl Peripheral<P = impl esp_hal::gpio::InputPin>  + 'static,
+        led_pin:    impl OutputPin + 'static,
+        enc_clk:    impl InputPin  + 'static,
+        enc_dt:     impl InputPin  + 'static,
+        skip_back:  impl InputPin  + 'static,
+        skip_ahead: impl InputPin  + 'static,
+        mute:       impl InputPin  + 'static,
+        pause_play: impl InputPin  + 'static,
     ) -> Self {
+        let input_cfg = InputConfig::default().with_pull(Pull::Up);
+
         // LED on (active low = set_low)
-        let mut led = Output::new(led_pin, Level::Low);
+        let mut led = Output::new(led_pin, Level::Low, OutputConfig::default());
         led.set_low();
 
         // Encoder with internal pull-ups
-        let encoder_clk = Input::new(enc_clk, Pull::Up);
-        let encoder_dt  = Input::new(enc_dt,  Pull::Up);
+        let encoder_clk = Input::new(enc_clk, input_cfg);
+        let encoder_dt  = Input::new(enc_dt,  input_cfg);
         let encoder_last_clk = encoder_clk.is_high();
 
         // Buttons with internal pull-ups
-        let btn_skip_back  = Input::new(skip_back,  Pull::Up);
-        let btn_skip_ahead = Input::new(skip_ahead, Pull::Up);
-        let btn_mute       = Input::new(mute,       Pull::Up);
-        let btn_pause_play = Input::new(pause_play, Pull::Up);
+        let btn_skip_back  = Input::new(skip_back,  input_cfg);
+        let btn_skip_ahead = Input::new(skip_ahead, input_cfg);
+        let btn_mute       = Input::new(mute,       input_cfg);
+        let btn_pause_play = Input::new(pause_play, input_cfg);
 
         // Use tick 0 as epoch so first press is always accepted after 50 ms
         let epoch = Instant::from_ticks(0);

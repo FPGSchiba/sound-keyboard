@@ -20,20 +20,25 @@ opt-level = "z"
 
 [dependencies]
 # HAL + panic handler
-esp-hal              = { version = "0.22", features = ["esp32s3"] }
-esp-backtrace        = { version = "0.14", features = ["esp32s3", "panic-handler", "exception-handler", "println"] }
-esp-println          = { version = "0.12", features = ["esp32s3", "log"] }
-log                  = { version = "0.4",  default-features = false }
+esp-hal              = { version = "=1.0.0-rc.0", features = ["esp32s3", "unstable"] }
+esp-backtrace        = { version = "0.18",  features = ["esp32s3", "panic-handler", "println"] }
+esp-println          = { version = "0.16",  features = ["esp32s3", "log-04"] }
+log                  = { version = "0.4",   default-features = false }
 
 # Embassy async runtime
-embassy-executor     = { version = "0.6",  features = ["task-arena-size-20480"] }
-embassy-time         = { version = "0.3" }
+embassy-executor     = { version = "0.7",  features = ["task-arena-size-20480"] }
+embassy-time         = { version = "0.4" }
 embassy-sync         = { version = "0.6" }
 embassy-futures      = { version = "0.1" }
-esp-hal-embassy      = { version = "0.5",  features = ["esp32s3", "integrated-timers"] }
+esp-hal-embassy      = { version = "=0.9.1",  features = ["esp32s3"] }
 
 # USB HID
 usb-device                     = { version = "0.3" }
-usbd-human-interface-device    = { version = "0.5" }
+usbd-human-interface-device    = { version = "0.6" }
 
-critical-section = "1.1"
+critical-section = "1.2"
+
+# Patch radium 0.7.0 to correctly detect Xtensa (ESP32) as a 32-bit-only atomic target.
+# Without this, radium unconditionally enables AtomicI64/AtomicU64 which don't exist on ESP32-S3.
+[patch.crates-io]
+radium = { path = "patches/radium-0.7.0" }
