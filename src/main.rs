@@ -6,6 +6,7 @@ extern crate esp_backtrace;
 use embassy_executor::Spawner;
 use embassy_futures::{join::join, yield_now};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
+use embassy_time::{Duration, Instant, Timer};
 use esp_hal::{
     otg_fs::{Usb, UsbBus},
     timer::timg::TimerGroup,
@@ -21,7 +22,6 @@ use usbd_human_interface_device::{
     prelude::*,
 };
 use usbd_serial::SerialPort; // <-- New CDC-ACM Import
-use embassy_time::{Duration, Instant, Timer};
 
 mod hid;
 mod io;
@@ -144,7 +144,6 @@ async fn main(_spawner: Spawner) {
 
             // 3. Command Handling
             if let Ok(cmd) = CHANNEL.try_receive() {
-
                 let log_msg = match cmd {
                     Command::VolumeUp => "Log: Volume Up\r\n",
                     Command::VolumeDown => "Log: Volume Down\r\n",
