@@ -32,7 +32,8 @@ use hid::{command_to_consumer, Command};
 use io::{ButtonEvent, EncoderDirection, IoHandler};
 
 // ── Static USB endpoint memory (must be in DRAM) ─────────────────────────────
-static mut EP_MEMORY: [u32; 1024] = [0u32; 1024];
+const EP_MEMORY_WORDS: usize = 1024;
+static mut EP_MEMORY: [u32; EP_MEMORY_WORDS] = [0u32; EP_MEMORY_WORDS];
 
 // ── HID command channel: IO task → USB task ──────────────────────────────────
 static CHANNEL: Channel<CriticalSectionRawMutex, Command, 8> = Channel::new();
@@ -71,8 +72,9 @@ async fn main(_spawner: Spawner) {
     io.set_led(true);
 
     let usb_peripheral = Usb::new(peripherals.USB0, peripherals.GPIO20, peripherals.GPIO19);
-    let ep_memory: &'static mut [u32] =
-        unsafe { core::slice::from_raw_parts_mut((&raw mut EP_MEMORY).cast::<u32>(), EP_MEMORY.len()) };
+    let ep_memory: &'static mut [u32] = unsafe {
+        core::slice::from_raw_parts_mut((&raw mut EP_MEMORY).cast::<u32>(), EP_MEMORY_WORDS)
+    };
     static USB_BUS: StaticCell<UsbBusAllocator<UsbBus<Usb<'static>>>> = StaticCell::new();
     let usb_bus_alloc: &'static UsbBusAllocator<UsbBus<Usb<'static>>> =
         USB_BUS.init(UsbBus::new(usb_peripheral, ep_memory));
