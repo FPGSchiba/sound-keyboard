@@ -103,11 +103,13 @@ async fn main(_spawner: Spawner) {
             let ms = (Instant::now() - boot_time).as_millis();
 
             // Encoder: log direction, forward HID command.
-            if let Some((dir, _)) = io.poll_encoder() {
+            if let Some(dir) = io.poll_encoder() {
                 let cmd = match dir {
                     EncoderDirection::ClockWise => Command::VolumeUp,
                     EncoderDirection::CounterClockWise => Command::VolumeDown,
                 };
+                // Channel capacity is 8; excess events are intentionally dropped.
+                // Under normal use (human input speed) the channel never fills.
                 CHANNEL.try_send(cmd).ok();
 
                 let mut msg = heapless::String::<64>::new();
@@ -116,6 +118,7 @@ async fn main(_spawner: Spawner) {
                     EncoderDirection::CounterClockWise => "CCW",
                 };
                 let _ = write!(msg, "[{}ms] ENC: {}\r\n", ms, dir_str);
+                // Log channel capacity is 8; dropped log messages are acceptable.
                 LOG_CHANNEL.try_send(msg).ok();
             }
 
@@ -127,6 +130,8 @@ async fn main(_spawner: Spawner) {
                     ButtonEvent::Mute => Command::Mute,
                     ButtonEvent::PausePlay => Command::PlayPause,
                 };
+                // Channel capacity is 8; excess events are intentionally dropped.
+                // Under normal use (human input speed) the channel never fills.
                 CHANNEL.try_send(cmd).ok();
             }
 

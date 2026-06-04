@@ -1,6 +1,3 @@
-use core::default::Default;
-use core::option::Option::{self, None, Some};
-
 use embassy_time::{Duration, Instant};
 use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin, Pull};
 
@@ -124,23 +121,20 @@ impl IoHandler {
     // ── Encoder polling ──────────────────────────────────────────────────────
     //
     // Detects a falling edge on A (the encoder "step" moment) and reads B to
-    // determine direction:  A falls while B is high → CW,  B is low → CCW.
-    // Returns (direction, b_was_high) so the caller can log the raw B state.
+    // determine direction: A falls while B is high → CW, B is low → CCW.
 
-    pub fn poll_encoder(&mut self) -> Option<(EncoderDirection, bool)> {
+    pub fn poll_encoder(&mut self) -> Option<EncoderDirection> {
         let a = self.encoder_a.is_high();
         if a == self.encoder_last_a {
             return None;
         }
         self.encoder_last_a = a;
         if !a {
-            let b = self.encoder_b.is_high();
-            let dir = if b {
+            return Some(if self.encoder_b.is_high() {
                 EncoderDirection::ClockWise
             } else {
                 EncoderDirection::CounterClockWise
-            };
-            return Some((dir, b));
+            });
         }
         None
     }
