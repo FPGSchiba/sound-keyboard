@@ -1,15 +1,21 @@
-use esp_idf_svc::hal::gpio::{Input, InputPin, Output, OutputPin, PinDriver, Pull};
-use std::time::{Duration, Instant};
+use embassy_time::{Duration, Instant};
+use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, OutputPin, Pull};
 
 // ── Pin Assignments ───────────────────────────────────────────────────────────
 //
 //  GPIO 21 : Status LED          (active low – XIAO ESP32S3 orange user LED)
-//  GPIO 5  : Rotary encoder CLK
-//  GPIO 6  : Rotary encoder DT
+//  GPIO 5  : Rotary encoder A    (pull-up; connect to GND via encoder pin C)
+//  GPIO 6  : Rotary encoder B    (pull-up; connect to GND via encoder pin C)
 //  GPIO 1  : Button – Skip Back  (active low, internal pull-up)
 //  GPIO 2  : Button – Skip Ahead (active low, internal pull-up)
 //  GPIO 3  : Button – Mute       (active low, internal pull-up)
 //  GPIO 4  : Button – Pause/Play (active low, internal pull-up)
+//
+//  Encoder wiring (ALPS EC12 / STEC12E):
+//    Pin A (left)   → GPIO5
+//    Pin C (centre) → GND
+//    Pin B (right)  → GPIO6
+//  No power supply needed — purely mechanical contacts.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -34,19 +40,19 @@ pub enum EncoderDirection {
 // ── IO Handler ────────────────────────────────────────────────────────────────
 
 pub struct IoHandler {
-    // Status LED
-    led: PinDriver<'static, Output>,
+    // Status LED (active low)
+    led: Output<'static>,
 
-    // Rotary encoder
-    encoder_clk: PinDriver<'static, Input>,
-    encoder_dt: PinDriver<'static, Input>,
-    encoder_last_clk: bool,
+    // Rotary encoder (quadrature, mechanical)
+    encoder_a: Input<'static>,
+    encoder_b: Input<'static>,
+    encoder_last_a: bool,
 
-    // Control buttons
-    btn_skip_back: PinDriver<'static, Input>,
-    btn_skip_ahead: PinDriver<'static, Input>,
-    btn_mute: PinDriver<'static, Input>,
-    btn_pause_play: PinDriver<'static, Input>,
+    // Control buttons (active low, pull-up)
+    btn_skip_back: Input<'static>,
+    btn_skip_ahead: Input<'static>,
+    btn_mute: Input<'static>,
+    btn_pause_play: Input<'static>,
 
     // Debounce state per button: (was_pressed, last_event_time)
     skip_back_db: (bool, Instant),
@@ -58,37 +64,38 @@ pub struct IoHandler {
 impl IoHandler {
     pub fn new(
         led_pin: impl OutputPin + 'static,
-        enc_clk: impl InputPin + 'static,
-        enc_dt: impl InputPin + 'static,
+        enc_a: impl InputPin + 'static,
+        enc_b: impl InputPin + 'static,
         skip_back: impl InputPin + 'static,
         skip_ahead: impl InputPin + 'static,
         mute: impl InputPin + 'static,
         pause_play: impl InputPin + 'static,
     ) -> Self {
-        // ── LED ──────────────────────────────────────────────────────────────
-        let mut led = PinDriver::output(led_pin).unwrap();
-        led.set_low().unwrap();
+        let input_cfg = InputConfig::default().with_pull(Pull::Up);
 
-        // ── Encoder ──────────────────────────────────────────────────────────
-        // Pass Pull::Up directly as the second argument, and remove .set_pull()
-        let encoder_clk = PinDriver::input(enc_clk, Pull::Up).unwrap();
-        let encoder_dt = PinDriver::input(enc_dt, Pull::Up).unwrap();
+        // LED on (active low = set_low)
+        let mut led = Output::new(led_pin, Level::Low, OutputConfig::default());
+        led.set_low();
 
-        let encoder_last_clk = encoder_clk.is_high();
+        // Encoder with internal pull-ups
+        let encoder_a = Input::new(enc_a, input_cfg);
+        let encoder_b = Input::new(enc_b, input_cfg);
+        let encoder_last_a = encoder_a.is_high();
 
-        // ── Buttons ──────────────────────────────────────────────────────────
-        let btn_skip_back = PinDriver::input(skip_back, Pull::Up).unwrap();
-        let btn_skip_ahead = PinDriver::input(skip_ahead, Pull::Up).unwrap();
-        let btn_mute = PinDriver::input(mute, Pull::Up).unwrap();
-        let btn_pause_play = PinDriver::input(pause_play, Pull::Up).unwrap();
+        // Buttons with internal pull-ups
+        let btn_skip_back = Input::new(skip_back, input_cfg);
+        let btn_skip_ahead = Input::new(skip_ahead, input_cfg);
+        let btn_mute = Input::new(mute, input_cfg);
+        let btn_pause_play = Input::new(pause_play, input_cfg);
 
-        let epoch = Instant::now();
+        // Use tick 0 as epoch so first press is always accepted after 50 ms
+        let epoch = Instant::from_ticks(0);
 
         IoHandler {
             led,
-            encoder_clk,
-            encoder_dt,
-            encoder_last_clk,
+            encoder_a,
+            encoder_b,
+            encoder_last_a,
             btn_skip_back,
             btn_skip_ahead,
             btn_mute,
@@ -103,31 +110,27 @@ impl IoHandler {
     // ── LED control ──────────────────────────────────────────────────────────
 
     pub fn set_led(&mut self, on: bool) {
-        // Active low: LED on = LOW, LED off = HIGH
+        // Active low: on → LOW, off → HIGH
         if on {
-            self.led.set_low().unwrap();
+            self.led.set_low()
         } else {
-            self.led.set_high().unwrap();
+            self.led.set_high()
         }
     }
 
     // ── Encoder polling ──────────────────────────────────────────────────────
     //
-    // Call this every loop iteration.  Returns a direction when the encoder
-    // is rotated, detected on the falling edge of CLK:
-    //   CLK ↓ + DT high  → clockwise
-    //   CLK ↓ + DT low   → counter-clockwise
+    // Detects a falling edge on A (the encoder "step" moment) and reads B to
+    // determine direction: A falls while B is high → CW, B is low → CCW.
 
     pub fn poll_encoder(&mut self) -> Option<EncoderDirection> {
-        let clk = self.encoder_clk.is_high();
-        if clk == self.encoder_last_clk {
+        let a = self.encoder_a.is_high();
+        if a == self.encoder_last_a {
             return None;
         }
-        self.encoder_last_clk = clk;
-
-        if !clk {
-            // Falling edge – sample DT to determine direction
-            return Some(if self.encoder_dt.is_high() {
+        self.encoder_last_a = a;
+        if !a {
+            return Some(if self.encoder_b.is_high() {
                 EncoderDirection::ClockWise
             } else {
                 EncoderDirection::CounterClockWise
@@ -137,10 +140,6 @@ impl IoHandler {
     }
 
     // ── Button polling ───────────────────────────────────────────────────────
-    //
-    // Returns at most one event per call (priority: skip back → skip ahead →
-    // mute → pause/play).  Events are edge-triggered (press only) with a
-    // 50 ms debounce window.
 
     pub fn poll_buttons(&mut self) -> Option<ButtonEvent> {
         let now = Instant::now();
@@ -177,13 +176,11 @@ impl IoHandler {
         ) {
             return Some(ev);
         }
-
         None
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────────
 
-    // Returns Some(event) on a clean press edge (after debounce window).
     fn debounce(
         pressed: bool,
         state: &mut (bool, Instant),
@@ -191,8 +188,7 @@ impl IoHandler {
         event: ButtonEvent,
     ) -> Option<ButtonEvent> {
         let (was_pressed, last_time) = state;
-
-        if pressed && !*was_pressed && now.duration_since(*last_time) >= DEBOUNCE {
+        if pressed && !*was_pressed && (now - *last_time) >= DEBOUNCE {
             *was_pressed = true;
             *last_time = now;
             return Some(event);

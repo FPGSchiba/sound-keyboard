@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["FPG Schiba <CraftZockerLP@gmail.com>"]
 edition = "2021"
 resolver = "2"
-rust-version = "1.77"
 
 [[bin]]
 name = "sound-keyboard"
@@ -12,19 +11,37 @@ harness = false
 
 [profile.release]
 opt-level = "s"
+lto = true
+codegen-units = 1
 
 [profile.dev]
 debug = true
 opt-level = "z"
 
-[features]
-default = []
-experimental = ["esp-idf-svc/experimental"]
-
 [dependencies]
-log = "0.4"
-esp-idf-svc = "0.52.1"
-anyhow = "1.0" # Optional, but highly recommended for standard Rust error handling
+# HAL + panic handler
+esp-hal              = { version = "=1.0.0-rc.0", features = ["esp32s3", "unstable"] }
+esp-backtrace        = { version = "0.18",  features = ["esp32s3", "panic-handler", "println"] }
+esp-println          = { version = "0.16",  features = ["esp32s3", "log-04"] }
+log                  = { version = "0.4",   default-features = false }
 
-[build-dependencies]
-embuild = "0.33"
+# Embassy async runtime
+embassy-executor     = { version = "0.7",  features = ["task-arena-size-20480"] }
+embassy-time         = { version = "0.4" }
+embassy-sync         = { version = "0.6" }
+embassy-futures      = { version = "0.1" }
+esp-hal-embassy      = { version = "=0.9.1",  features = ["esp32s3"] }
+
+# USB HID
+usb-device                     = { version = "0.3" }
+usbd-human-interface-device    = { version = "0.6" }
+
+critical-section = "1.2"
+static_cell = "2.1"
+usbd-serial = "0.2.2"
+heapless = "0.8"
+
+# Patch radium 0.7.0 to correctly detect Xtensa (ESP32) as a 32-bit-only atomic target.
+# Without this, radium unconditionally enables AtomicI64/AtomicU64 which don't exist on ESP32-S3.
+[patch.crates-io]
+radium = { path = "patches/radium-0.7.0" }
