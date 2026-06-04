@@ -72,7 +72,7 @@ async fn main(_spawner: Spawner) {
 
     let usb_peripheral = Usb::new(peripherals.USB0, peripherals.GPIO20, peripherals.GPIO19);
     let ep_memory: &'static mut [u32] =
-        unsafe { core::slice::from_raw_parts_mut((&raw mut EP_MEMORY).cast::<u32>(), 1024) };
+        unsafe { core::slice::from_raw_parts_mut((&raw mut EP_MEMORY).cast::<u32>(), EP_MEMORY.len()) };
     static USB_BUS: StaticCell<UsbBusAllocator<UsbBus<Usb<'static>>>> = StaticCell::new();
     let usb_bus_alloc: &'static UsbBusAllocator<UsbBus<Usb<'static>>> =
         USB_BUS.init(UsbBus::new(usb_peripheral, ep_memory));
@@ -90,10 +90,10 @@ async fn main(_spawner: Spawner) {
             .manufacturer("Schiba")
             .product("Cool custom sound controller (CCSC)")
             .serial_number("SK069")])
-        .unwrap()
+        .expect("USB string descriptors exceeded 126 bytes")
         .composite_with_iads()
         .max_packet_size_0(64)
-        .unwrap()
+        .expect("USB max packet size must be 8, 16, 32, or 64")
         .build();
 
     // ── Two cooperative async loops ───────────────────────────────────────────
@@ -172,17 +172,21 @@ async fn main(_spawner: Spawner) {
                         Consumer::Unassigned,
                     ],
                 };
-                consumer_hid.device().write_report(&press).ok();
+                // Only hold and release if the press report was accepted by the USB stack.
+                // If USB is not yet enumerated the command is silently dropped — acceptable
+                // for a media controller.
+                if consumer_hid.device().write_report(&press).is_ok() {
+                    let hold_end = Instant::now() + embassy_time::Duration::from_millis(50);
+                    while Instant::now() < hold_end {
+                        usb_dev.poll(&mut [&mut serial, &mut consumer_hid]);
+                        yield_now().await;
+                    }
 
-                for _ in 0..1000u32 {
-                    usb_dev.poll(&mut [&mut serial, &mut consumer_hid]);
-                    yield_now().await;
+                    let release = MultipleConsumerReport {
+                        codes: [Consumer::Unassigned; 4],
+                    };
+                    consumer_hid.device().write_report(&release).ok();
                 }
-
-                let release = MultipleConsumerReport {
-                    codes: [Consumer::Unassigned; 4],
-                };
-                consumer_hid.device().write_report(&release).ok();
             } else {
                 yield_now().await;
             }
