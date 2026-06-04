@@ -3,10 +3,12 @@
 
 extern crate esp_backtrace;
 
+use core::fmt::Write;
+
 use embassy_executor::Spawner;
 use embassy_futures::{join::join, yield_now};
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, channel::Channel};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Instant, Timer};
 use esp_hal::{
     otg_fs::{Usb, UsbBus},
     timer::timg::TimerGroup,
@@ -21,7 +23,7 @@ use usbd_human_interface_device::{
     page::Consumer,
     prelude::*,
 };
-use usbd_serial::SerialPort; // <-- New CDC-ACM Import
+use usbd_serial::SerialPort;
 
 mod hid;
 mod io;
@@ -30,12 +32,14 @@ use hid::{command_to_consumer, Command};
 use io::{ButtonEvent, EncoderDirection, IoHandler};
 
 // ── Static USB endpoint memory (must be in DRAM) ─────────────────────────────
-// INCREASED to 2048: Two interfaces (HID + CDC) require more endpoint memory buffer.
 static mut EP_MEMORY: [u32; 1024] = [0u32; 1024];
 
-// ── Command channel: IO task → USB task ──────────────────────────────────────
-
+// ── HID command channel: IO task → USB task ──────────────────────────────────
 static CHANNEL: Channel<CriticalSectionRawMutex, Command, 8> = Channel::new();
+
+// ── Debug log channel: IO task → USB task ────────────────────────────────────
+// All serial writes go through usb_task to avoid a dual-borrow on `serial`.
+static LOG_CHANNEL: Channel<CriticalSectionRawMutex, heapless::String<64>, 8> = Channel::new();
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -48,10 +52,11 @@ async fn main(_spawner: Spawner) {
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     esp_hal_embassy::init(timg0.timer0);
 
-    // 🛑 THE FIX FOR THE RESET TRAP:
-    // Wait 500ms before touching the USB pins. This allows espflash
-    // to cleanly finish its reset handshake without getting interrupted.
+    // Wait 500ms so espflash can finish its reset handshake before USB init.
     Timer::after(embassy_time::Duration::from_millis(500)).await;
+
+    // Reference point for elapsed-time logging.
+    let boot_time = Instant::now();
 
     // ── IO handler (LED + encoder + buttons) ──────────────────────────────────
     let mut io = IoHandler::new(
@@ -65,8 +70,6 @@ async fn main(_spawner: Spawner) {
     );
     io.set_led(true);
 
-    // ... [Keep your UsbBusAllocator setup exactly the same] ...
-
     let usb_peripheral = Usb::new(peripherals.USB0, peripherals.GPIO20, peripherals.GPIO19);
     let ep_memory: &'static mut [u32] =
         unsafe { core::slice::from_raw_parts_mut((&raw mut EP_MEMORY).cast::<u32>(), 1024) };
@@ -74,23 +77,20 @@ async fn main(_spawner: Spawner) {
     let usb_bus_alloc: &'static UsbBusAllocator<UsbBus<Usb<'static>>> =
         USB_BUS.init(UsbBus::new(usb_peripheral, ep_memory));
 
-    // 🛑 1. CREATE SERIAL FIRST (This forces CDC to grab Interface 0 and 1)
+    // CDC-ACM serial first → grabs Interface 0 and 1.
     let mut serial = SerialPort::new(usb_bus_alloc);
 
-    // 🛑 2. CREATE HID SECOND (This forces HID to grab Interface 2)
+    // HID second → grabs Interface 2.
     let mut consumer_hid = UsbHidClassBuilder::new()
         .add_device(ConsumerControlConfig::default())
         .build(usb_bus_alloc);
 
-    // 🛑 3. CLEAN UP THE BUILDER
-    let mut usb_dev = UsbDeviceBuilder::new(usb_bus_alloc, UsbVidPid(0x1209, 0x0013)) // Bump to 0013
+    let mut usb_dev = UsbDeviceBuilder::new(usb_bus_alloc, UsbVidPid(0x1209, 0x0013))
         .strings(&[StringDescriptors::default()
-            .manufacturer("FPGSchiba")
-            .product("Sound Keyboard")
-            .serial_number("SK013")])
+            .manufacturer("Schiba")
+            .product("Cool custom sound controller (CCSC)")
+            .serial_number("SK069")])
         .unwrap()
-        // REMOVED manual device_class(), sub_class(), and protocol() calls!
-        // .composite_with_iads() handles setting all three perfectly on its own.
         .composite_with_iads()
         .max_packet_size_0(64)
         .unwrap()
@@ -100,14 +100,26 @@ async fn main(_spawner: Spawner) {
 
     let io_task = async {
         loop {
-            if let Some(dir) = io.poll_encoder() {
+            let ms = (Instant::now() - boot_time).as_millis();
+
+            // Encoder: log direction, forward HID command.
+            if let Some((dir, _)) = io.poll_encoder() {
                 let cmd = match dir {
                     EncoderDirection::ClockWise => Command::VolumeUp,
                     EncoderDirection::CounterClockWise => Command::VolumeDown,
                 };
                 CHANNEL.try_send(cmd).ok();
+
+                let mut msg = heapless::String::<64>::new();
+                let dir_str = match dir {
+                    EncoderDirection::ClockWise => "CW",
+                    EncoderDirection::CounterClockWise => "CCW",
+                };
+                let _ = write!(msg, "[{}ms] ENC: {}\r\n", ms, dir_str);
+                LOG_CHANNEL.try_send(msg).ok();
             }
 
+            // Buttons: forward HID command (logging happens in usb_task).
             if let Some(event) = io.poll_buttons() {
                 let cmd = match event {
                     ButtonEvent::SkipBack => Command::ScanPrevious,
@@ -123,37 +135,33 @@ async fn main(_spawner: Spawner) {
     };
 
     let usb_task = async {
-        // Track the last time we sent a heartbeat
-        let mut last_heartbeat = Instant::now();
-        let heartbeat_interval = Duration::from_secs(2); // Send every 2 seconds
-
         loop {
-            // 1. Keep BOTH USB interfaces alive
+            let ms = (Instant::now() - boot_time).as_millis();
+
+            // 1. Keep both USB interfaces alive; drain any incoming CDC bytes.
             if usb_dev.poll(&mut [&mut serial, &mut consumer_hid]) {
                 let mut buf = [0u8; 64];
                 let _ = serial.read(&mut buf);
             }
 
-            // 2. The Keep-Alive Heartbeat
-            let now = Instant::now();
-            if now - last_heartbeat >= heartbeat_interval {
-                // Write directly to the CDC-ACM serial port
-                let _ = serial.write(b"[Ping] USB Loop Active\r\n");
-                last_heartbeat = now;
+            // 2. Drain the log channel — all serial writes happen here.
+            while let Ok(msg) = LOG_CHANNEL.try_receive() {
+                let _ = serial.write(msg.as_bytes());
             }
 
-            // 3. Command Handling
+            // 3. HID command handling.
             if let Ok(cmd) = CHANNEL.try_receive() {
-                let log_msg = match cmd {
-                    Command::VolumeUp => "Log: Volume Up\r\n",
-                    Command::VolumeDown => "Log: Volume Down\r\n",
-                    Command::ScanPrevious => "Log: Skip Back\r\n",
-                    Command::ScanNext => "Log: Skip Ahead\r\n",
-                    Command::Mute => "Log: Mute\r\n",
-                    Command::PlayPause => "Log: Play/Pause\r\n",
+                let cmd_str = match cmd {
+                    Command::VolumeUp => "Volume Up",
+                    Command::VolumeDown => "Volume Down",
+                    Command::ScanPrevious => "Skip Back",
+                    Command::ScanNext => "Skip Ahead",
+                    Command::Mute => "Mute",
+                    Command::PlayPause => "Play/Pause",
                 };
-
-                let _ = serial.write(log_msg.as_bytes());
+                let mut msg = heapless::String::<64>::new();
+                let _ = write!(msg, "[{}ms] CMD: {}\r\n", ms, cmd_str);
+                let _ = serial.write(msg.as_bytes());
 
                 let consumer = command_to_consumer(cmd);
                 let press = MultipleConsumerReport {

@@ -39,6 +39,7 @@ usbd-human-interface-device    = { version = "0.6" }
 critical-section = "1.2"
 static_cell = "2.1"
 usbd-serial = "0.2.2"
+heapless = "0.8"
 
 # Patch radium 0.7.0 to correctly detect Xtensa (ESP32) as a 32-bit-only atomic target.
 # Without this, radium unconditionally enables AtomicI64/AtomicU64 which don't exist on ESP32-S3.

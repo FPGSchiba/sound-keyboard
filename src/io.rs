@@ -7,12 +7,18 @@ use esp_hal::gpio::{Input, InputConfig, InputPin, Level, Output, OutputConfig, O
 // ── Pin Assignments ───────────────────────────────────────────────────────────
 //
 //  GPIO 21 : Status LED          (active low – XIAO ESP32S3 orange user LED)
-//  GPIO 5  : Rotary encoder CLK
-//  GPIO 6  : Rotary encoder DT
+//  GPIO 5  : Rotary encoder A    (pull-up; connect to GND via encoder pin C)
+//  GPIO 6  : Rotary encoder B    (pull-up; connect to GND via encoder pin C)
 //  GPIO 1  : Button – Skip Back  (active low, internal pull-up)
 //  GPIO 2  : Button – Skip Ahead (active low, internal pull-up)
 //  GPIO 3  : Button – Mute       (active low, internal pull-up)
 //  GPIO 4  : Button – Pause/Play (active low, internal pull-up)
+//
+//  Encoder wiring (ALPS EC12 / STEC12E):
+//    Pin A (left)   → GPIO5
+//    Pin C (centre) → GND
+//    Pin B (right)  → GPIO6
+//  No power supply needed — purely mechanical contacts.
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -40,10 +46,10 @@ pub struct IoHandler {
     // Status LED (active low)
     led: Output<'static>,
 
-    // Rotary encoder
-    encoder_clk: Input<'static>,
-    encoder_dt: Input<'static>,
-    encoder_last_clk: bool,
+    // Rotary encoder (quadrature, mechanical)
+    encoder_a: Input<'static>,
+    encoder_b: Input<'static>,
+    encoder_last_a: bool,
 
     // Control buttons (active low, pull-up)
     btn_skip_back: Input<'static>,
@@ -61,8 +67,8 @@ pub struct IoHandler {
 impl IoHandler {
     pub fn new(
         led_pin: impl OutputPin + 'static,
-        enc_clk: impl InputPin + 'static,
-        enc_dt: impl InputPin + 'static,
+        enc_a: impl InputPin + 'static,
+        enc_b: impl InputPin + 'static,
         skip_back: impl InputPin + 'static,
         skip_ahead: impl InputPin + 'static,
         mute: impl InputPin + 'static,
@@ -75,9 +81,9 @@ impl IoHandler {
         led.set_low();
 
         // Encoder with internal pull-ups
-        let encoder_clk = Input::new(enc_clk, input_cfg);
-        let encoder_dt = Input::new(enc_dt, input_cfg);
-        let encoder_last_clk = encoder_clk.is_high();
+        let encoder_a = Input::new(enc_a, input_cfg);
+        let encoder_b = Input::new(enc_b, input_cfg);
+        let encoder_last_a = encoder_a.is_high();
 
         // Buttons with internal pull-ups
         let btn_skip_back = Input::new(skip_back, input_cfg);
@@ -90,9 +96,9 @@ impl IoHandler {
 
         IoHandler {
             led,
-            encoder_clk,
-            encoder_dt,
-            encoder_last_clk,
+            encoder_a,
+            encoder_b,
+            encoder_last_a,
             btn_skip_back,
             btn_skip_ahead,
             btn_mute,
@@ -116,19 +122,25 @@ impl IoHandler {
     }
 
     // ── Encoder polling ──────────────────────────────────────────────────────
+    //
+    // Detects a falling edge on A (the encoder "step" moment) and reads B to
+    // determine direction:  A falls while B is high → CW,  B is low → CCW.
+    // Returns (direction, b_was_high) so the caller can log the raw B state.
 
-    pub fn poll_encoder(&mut self) -> Option<EncoderDirection> {
-        let clk = self.encoder_clk.is_high();
-        if clk == self.encoder_last_clk {
+    pub fn poll_encoder(&mut self) -> Option<(EncoderDirection, bool)> {
+        let a = self.encoder_a.is_high();
+        if a == self.encoder_last_a {
             return None;
         }
-        self.encoder_last_clk = clk;
-        if !clk {
-            return Some(if self.encoder_dt.is_high() {
+        self.encoder_last_a = a;
+        if !a {
+            let b = self.encoder_b.is_high();
+            let dir = if b {
                 EncoderDirection::ClockWise
             } else {
                 EncoderDirection::CounterClockWise
-            });
+            };
+            return Some((dir, b));
         }
         None
     }
